@@ -1,0 +1,338 @@
+---
+title: "Group Project_4830"
+output: html_document
+date: "2024-11-11"
+---
+
+```{r}
+#Load libraries
+library(tidyverse)
+library(kableExtra)
+library(rsample)
+library(recipes)
+library(parsnip)
+library(yardstick)
+library(viridisLite)
+library(GGally)
+```
+
+
+```{r}
+Heart<-read.csv("C:/DOCUMENTS/LANGARA/3rd SEM/DANA 4830/Group Project/processed.cleveland.data")
+
+View(Heart)
+```
+
+```{r}
+names <- c("Age",
+           "Sex",
+           "Chest_Pain_Type",
+           "Resting_Blood_Pressure",
+           "Serum_Cholesterol",
+           "Fasting_Blood_Sugar",
+           "Resting_ECG",
+           "Max_Heart_Rate_Achieved",
+           "Exercise_Induced_Angina",
+           "ST_Depression_Exercise",
+           "Peak_Exercise_ST_Segment",
+           "Num_Major_Vessels_Flouro",
+           "Thalassemia",
+           "Diagnosis_Heart_Disease")
+```
+
+
+```{r}
+colnames(Heart) <- names
+View(Heart)
+```
+
+```{r}
+nrow(Heart)
+```
+
+```{r}
+missing_values <- sapply(Heart, function(x) sum(is.na(x)))
+
+print(missing_values)
+```
+
+```{r}
+Heart[Heart == '?'] <- NA
+View(Heart)
+```
+
+
+```{r}
+Heart <- na.omit(Heart)
+nrow(Heart)
+```
+
+```{r}
+
+#Determine the number of values in each level of dependent variable
+Heart %>% 
+  drop_na() %>%
+  group_by(Diagnosis_Heart_Disease) %>%
+  count() %>% 
+  ungroup() %>%
+  kable(align = rep("c", 2)) %>% kable_styling("full_width" = F)
+```
+
+```{r}
+Heart$Diagnosis_Heart_Disease <- ifelse(Heart$Diagnosis_Heart_Disease > 0, 1, 0)
+table(Heart$Diagnosis_Heart_Disease)
+```
+
+```{r}
+str(Heart)
+```
+
+
+### Converting Selected Columns to Factor
+
+```{r}
+library(dplyr)
+
+Heart <- Heart %>%
+  mutate(across(c(Resting_ECG, 
+                  Fasting_Blood_Sugar, 
+                  Sex, 
+                  Diagnosis_Heart_Disease, 
+                  Exercise_Induced_Angina, 
+                  Peak_Exercise_ST_Segment, 
+                  Chest_Pain_Type,
+                  Thalassemia), as.factor))
+
+
+```
+
+```{r}
+str(Heart)
+```
+```{r}
+library(dplyr)
+
+Heart <- Heart %>%
+  mutate(Num_Major_Vessels_Flouro = as.numeric(Num_Major_Vessels_Flouro))
+
+```
+
+
+## Fit regression model with all variables
+
+```{r}
+Heart_fit <- glm(Diagnosis_Heart_Disease ~ ., data = Heart, family = binomial)
+
+summary(Heart_fit)
+```
+
+## Split the data into training and testing sets
+
+#### Split the dataset into training (70%) and testing (30%) sets.
+
+```{r}
+set.seed(123)  
+train_indices <- sample(1:nrow(Heart), size = 0.7 * nrow(Heart))
+train_data <- Heart[train_indices, ]
+test_data <- Heart[-train_indices, ]
+```
+
+
+# Step Wise Regression
+
+```{r}
+# Full model with all predictors
+full_model <- glm(Diagnosis_Heart_Disease ~ ., data = train_data, family = binomial)
+```
+
+```{r}
+# Null model with only the intercept
+null_model <- glm(Diagnosis_Heart_Disease ~ 1, data = train_data, family = binomial)
+```
+
+## Perform forward stepwise regression
+
+```{r}
+library(MASS)
+
+forward_model <- stepAIC(null_model, scope = list(lower = null_model, upper = full_model), direction = "forward")
+
+summary(forward_model)
+```
+## Perform Backward stepwise regression
+
+```{r}
+library(MASS)
+backward_model <- stepAIC(full_model, direction = "backward")
+summary(backward_model)
+```
+## Perform both directions stepwise regression
+
+```{r}
+both_model <- stepAIC(null_model, scope = list(lower = null_model, upper = full_model), direction = "both")
+summary(both_model)
+```
+```{r}
+both_model$anova
+```
+The variables excluded from the model cause the AIC to increase while those included in the model give the least AIC values.
+
+## Testing the performance of the selected model
+
+```{r}
+predictions_both <- predict(both_model, newdata = test_data,type = "response")
+predictions_both
+```
+
+```{r}
+# Convert predicted probabilities to binary class predictions
+predicted_classes_both <- ifelse(predictions_both > 0.5, 1, 0)
+```
+
+
+### Evaluate the both directions model
+
+```{r}
+confusion_matrix_both <- table(test_data$Diagnosis_Heart_Disease, predicted_classes_both)
+confusion_matrix_both
+```
+## Determining the most accurate threshold for classification
+
+```{r}
+library(pROC)
+
+roc_curve <- roc(test_data$Diagnosis_Heart_Disease, predictions_both)
+
+# Find optimal threshold using Youden's J statistic
+optimal_threshold <- coords(roc_curve, "best", ret = "threshold", best.method = "youden")
+optimal_threshold
+```
+```{r}
+library(pROC)
+
+# Example: Generating a colorful ROC plot
+plot.roc(
+  roc_curve,                  # The ROC curve object
+  legacy.axes = TRUE,         # Use legacy axes (FPR on X-axis, TPR on Y-axis)
+  col = "#1f77b4",            # Set the color of the curve (e.g., a blue tone)
+  lwd = 3,                    # Line width for better visibility
+  main = "ROC Curve",         # Add a title
+  xlab = "False Positive Rate", # Customize X-axis label
+  ylab = "True Positive Rate"   # Customize Y-axis label
+)
+
+# Add gridlines for better readability
+grid()
+
+```
+### 2nd Method
+
+
+```{r}
+# Function to classify based on threshold
+classify <- function(predictions_both, threshold) {
+  ifelse(predictions_both > threshold, 1, 0)
+}
+
+```
+
+```{r}
+library(pROC)
+
+# Actual outcomes
+actual <- test_data$Diagnosis_Heart_Disease  # Replace 'response' with your actual column name
+
+# Evaluate multiple thresholds
+thresholds <- seq(0.1, 0.9, by = 0.1)
+results <- data.frame()
+
+for (threshold in thresholds) {
+  predicted <- classify(predictions_both, threshold)
+  
+  # Create confusion matrix
+  confusion <- table(Predicted = predicted, Actual = actual)
+  
+  # Calculate performance metrics
+  tp <- confusion[2, 2]  # True positives
+  fp <- confusion[2, 1]  # False positives
+  tn <- confusion[1, 1]  # True negatives
+  fn <- confusion[1, 2]  # False negatives
+  
+  sensitivity <- tp / (tp + fn)  # Recall or sensitivity
+  specificity <- tn / (tn + fp)  # Specificity
+  accuracy <- (tp + tn) / sum(confusion)  # Accuracy
+  
+  # Store results
+  results <- rbind(results, data.frame(Threshold = threshold,
+                                       Accuracy = accuracy,
+                                       Sensitivity = sensitivity,
+                                       Specificity = specificity))
+}
+
+```
+
+```{r}
+library(ggplot2)
+
+# Plot results with thicker lines and a better theme
+ggplot(results, aes(x = Threshold)) +
+  geom_line(aes(y = Accuracy, color = "Accuracy"), size = 1.2) +     # Thicker line for Accuracy
+  geom_line(aes(y = Sensitivity, color = "Sensitivity"), size = 1.2) +  # Thicker line for Sensitivity
+  geom_line(aes(y = Specificity, color = "Specificity"), size = 1.2) +  # Thicker line for Specificity
+  labs(
+    title = "Performance Metrics vs Threshold",     # Add a title
+    x = "Threshold",                                # Label for x-axis
+    y = "Metric Value",                             # Label for y-axis
+    color = "Metric"                                # Legend title
+  ) +
+  scale_color_manual(values = c("Accuracy" = "#1f78b4",   # Customize colors
+                                "Sensitivity" = "#33a02c",
+                                "Specificity" = "#e31a1c")) +
+  theme_minimal(base_size = 14) +                   # Use minimal theme with larger font
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"), # Center and bold title
+    legend.position = "bottom",                   # Move legend to bottom
+    legend.key.width = unit(1, "cm"),             # Adjust legend key size
+    legend.title = element_text(size = 12),       # Customize legend title size
+    axis.text = element_text(size = 12),          # Customize axis text size
+    axis.title = element_text(size = 14)          # Customize axis label size
+  )
+
+
+```
+
+```{r}
+optimal_threshold <- results$Threshold[which.max(results$Accuracy)]
+optimal_threshold
+
+```
+
+## Validate the Chosen Threshold
+
+```{r}
+library(caret)
+
+predicted_optimal <- classify(predictions_both, optimal_threshold)
+confusionMatrix(table(Predicted = predicted_optimal, Actual = actual))
+```
+```{r}
+predictions_all <- predict(both_model, newdata = Heart,type = "response")
+
+```
+
+```{r}
+library(caret)
+
+predicted_opt <- classify(predictions_all, optimal_threshold)
+confusionMatrix(table(Predicted = predicted_opt, Actual = Heart$Diagnosis_Heart_Disease))
+```
+
+
+
+
+
+
+
+
+
+
